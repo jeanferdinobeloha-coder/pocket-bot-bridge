@@ -9,7 +9,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-SSID = os.environ.get("POCKET_OPTION_SSID", "")
+SESSION_TOKEN = os.environ.get("POCKET_OPTION_SSID", "").strip()
 
 def clean_asset_name(raw_asset):
     match = re.search(r'\((.*?)\)', raw_asset)
@@ -20,7 +20,7 @@ def clean_asset_name(raw_asset):
     if clean.endswith("OTC"):
         clean = clean[:-3]
         
-    return [f"{clean}_otc", f"{clean} OTC", clean]
+    return [f"{clean}_otc", clean, f"{clean} OTC"]
 
 def send_pocket_order(asset, action, amount, duration):
     ws_url = "wss://api-fin.po.market/socket.io/?EIO=4&transport=websocket"
@@ -30,22 +30,23 @@ def send_pocket_order(asset, action, amount, duration):
 
     for target_asset in possible_assets:
         try:
-            ws = websocket.create_connection(ws_url, timeout=10)
+            ws = websocket.create_connection(ws_url, timeout=8)
             
-            # Message 1 : Connexion au SSID / Session
-            if SSID.startswith('42'):
-                ws.send(SSID)
-            else:
-                ws.send(f'42["auth", {{"session": "{SSID}", "isDemo": 1}}]')
+            # 1. Message d'authentification
+            auth_payload = {
+                "session": SESSION_TOKEN,
+                "isDemo": 1
+            }
+            ws.send(f'42["auth", {json.dumps(auth_payload)}]')
             
-            # Écoute de confirmation (1 message)
+            # Attente de la confirmation
             try:
                 ws.recv()
             except Exception:
                 pass
 
-            # Message 2 : Envoi de l'ordre
-            trade_data = {
+            # 2. Envoi de la commande d'ouverture de position
+            trade_payload = {
                 "asset": target_asset,
                 "amount": float(amount),
                 "action": direction,
@@ -54,9 +55,9 @@ def send_pocket_order(asset, action, amount, duration):
                 "time": int(duration)
             }
             
-            ws.send(f'42["openOrder", {json.dumps(trade_data)}]')
+            ws.send(f'42["openOrder", {json.dumps(trade_payload)}]')
             ws.close()
-            return True, f"Ordre {direction.upper()} envoyé pour {target_asset}"
+            return True, f"Ordre {direction.upper()} envoyé avec succès pour {target_asset}"
         except Exception as e:
             last_error = str(e)
             continue
@@ -71,7 +72,7 @@ def health_check():
 def execute_trade():
     try:
         data = request.json or {}
-        asset = data.get('asset', 'USDJPY_otc')
+        asset = data.get('asset', 'EURUSD_otc')
         action = data.get('action', 'call')
         amount = float(data.get('amount', 10.0))
         rsi = float(data.get('rsi', 50.0))
