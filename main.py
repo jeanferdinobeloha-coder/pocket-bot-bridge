@@ -21,7 +21,7 @@ def clean_asset_name(raw_asset):
     if clean.endswith("OTC"):
         clean = clean[:-3]
         
-    # Liste ordonnée des formats testés
+    # Liste ordonnée des formats testés pour Pocket Option
     return [f"{clean}_otc", clean, f"{clean} OTC"]
 
 def send_pocket_order(asset, action, amount, duration):
@@ -46,7 +46,7 @@ def send_pocket_order(asset, action, amount, duration):
             }
             ws.send(f'42["auth", {json.dumps(auth_data)}]')
             
-            # Écoute de la réponse du serveur
+            # Écoute de la réponse de confirmation
             try:
                 for _ in range(3):
                     msg = ws.recv()
@@ -102,11 +102,15 @@ def execute_trade():
                 "message": msg
             }), 200
         else:
-            return jsonify({"status": "error", "message": msg}), 400
+            # Renvoyer l'erreur détaillée dans la réponse pour diagnostic
+            return jsonify({
+                "status": "error", 
+                "message": msg
+            }), 200
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
-                
+    
