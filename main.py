@@ -12,6 +12,7 @@ CORS(app)
 SESSION_TOKEN = os.environ.get("POCKET_OPTION_SSID", "").strip()
 
 def clean_asset_name(raw_asset):
+    # Extrait la paire entre parenthèses si présente (ex: "Or (XAU/USD)" -> "XAU/USD")
     match = re.search(r'\((.*?)\)', raw_asset)
     if match:
         raw_asset = match.group(1)
@@ -20,6 +21,7 @@ def clean_asset_name(raw_asset):
     if clean.endswith("OTC"):
         clean = clean[:-3]
         
+    # Liste ordonnée des formats testés
     return [f"{clean}_otc", clean, f"{clean} OTC"]
 
 def send_pocket_order(asset, action, amount, duration):
@@ -28,25 +30,33 @@ def send_pocket_order(asset, action, amount, duration):
     direction = "call" if action.lower() in ["call", "buy"] else "put"
     last_error = None
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Origin": "https://pocketoption.com"
+    }
+
     for target_asset in possible_assets:
         try:
-            ws = websocket.create_connection(ws_url, timeout=8)
+            ws = websocket.create_connection(ws_url, header=headers, timeout=8)
             
-            # 1. Message d'authentification
-            auth_payload = {
+            # 1. Handshake Socket.IO & Authentification
+            auth_data = {
                 "session": SESSION_TOKEN,
                 "isDemo": 1
             }
-            ws.send(f'42["auth", {json.dumps(auth_payload)}]')
+            ws.send(f'42["auth", {json.dumps(auth_data)}]')
             
-            # Attente de la confirmation
+            # Écoute de la réponse du serveur
             try:
-                ws.recv()
+                for _ in range(3):
+                    msg = ws.recv()
+                    if "auth" in msg or "success" in msg:
+                        break
             except Exception:
                 pass
 
             # 2. Envoi de la commande d'ouverture de position
-            trade_payload = {
+            trade_data = {
                 "asset": target_asset,
                 "amount": float(amount),
                 "action": direction,
@@ -55,7 +65,7 @@ def send_pocket_order(asset, action, amount, duration):
                 "time": int(duration)
             }
             
-            ws.send(f'42["openOrder", {json.dumps(trade_payload)}]')
+            ws.send(f'42["openOrder", {json.dumps(trade_data)}]')
             ws.close()
             return True, f"Ordre {direction.upper()} envoyé avec succès pour {target_asset}"
         except Exception as e:
@@ -77,6 +87,7 @@ def execute_trade():
         amount = float(data.get('amount', 10.0))
         rsi = float(data.get('rsi', 50.0))
 
+        # Durée estimée en secondes
         duration = random.randint(30, 60) if (rsi > 70 or rsi < 30) else random.randint(120, 300)
 
         success, msg = send_pocket_order(asset, action, amount, duration)
@@ -98,3 +109,4 @@ def execute_trade():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+                
