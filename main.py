@@ -9,36 +9,42 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-SSID = os.environ.get("POCKET_OPTION_SSID")
+SSID = os.environ.get("POCKET_OPTION_SSID", "")
 
 def clean_asset_name(raw_asset):
-    # Extrait ce qui est entre parenthèses si présent : "Or (XAU/USD)" -> "XAU/USD"
     match = re.search(r'\((.*?)\)', raw_asset)
     if match:
         raw_asset = match.group(1)
         
-    # Nettoie les caractères spéciaux, espaces et slashs : "XAU/USD" -> "XAUUSD"
     clean = re.sub(r'[^A-Za-z0-9]', '', raw_asset).upper()
-    
-    # Retire OTC si déjà présent à la fin pour éviter les doublons
     if clean.endswith("OTC"):
         clean = clean[:-3]
         
-    # Retourne les variantes possibles demandées par Pocket Option
     return [f"{clean}_otc", f"{clean} OTC", clean]
 
 def send_pocket_order(asset, action, amount, duration):
     ws_url = "wss://api-fin.po.market/socket.io/?EIO=4&transport=websocket"
     possible_assets = clean_asset_name(asset)
-    
     direction = "call" if action.lower() in ["call", "buy"] else "put"
     last_error = None
 
     for target_asset in possible_assets:
         try:
-            ws = websocket.create_connection(ws_url, timeout=5)
-            ws.send(SSID)
+            ws = websocket.create_connection(ws_url, timeout=10)
             
+            # Message 1 : Connexion au SSID / Session
+            if SSID.startswith('42'):
+                ws.send(SSID)
+            else:
+                ws.send(f'42["auth", {{"session": "{SSID}", "isDemo": 1}}]')
+            
+            # Écoute de confirmation (1 message)
+            try:
+                ws.recv()
+            except Exception:
+                pass
+
+            # Message 2 : Envoi de l'ordre
             trade_data = {
                 "asset": target_asset,
                 "amount": float(amount),
@@ -48,15 +54,14 @@ def send_pocket_order(asset, action, amount, duration):
                 "time": int(duration)
             }
             
-            trade_msg = f'42["openOrder", {json.dumps(trade_data)}]'
-            ws.send(trade_msg)
+            ws.send(f'42["openOrder", {json.dumps(trade_data)}]')
             ws.close()
-            return True, f"Ordre {direction.upper()} exécuté pour {target_asset}"
+            return True, f"Ordre {direction.upper()} envoyé pour {target_asset}"
         except Exception as e:
             last_error = str(e)
             continue
             
-    return False, f"Échec d'envoi pour {asset}. Erreur : {last_error}"
+    return False, f"Échec pour {asset}. Erreur : {last_error}"
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -66,15 +71,12 @@ def health_check():
 def execute_trade():
     try:
         data = request.json or {}
-        asset = data.get('asset', 'EURUSD_otc')
+        asset = data.get('asset', 'USDJPY_otc')
         action = data.get('action', 'call')
         amount = float(data.get('amount', 10.0))
         rsi = float(data.get('rsi', 50.0))
 
-        if rsi > 70 or rsi < 30:
-            duration = random.randint(30, 60)
-        else:
-            duration = random.randint(120, 300)
+        duration = random.randint(30, 60) if (rsi > 70 or rsi < 30) else random.randint(120, 300)
 
         success, msg = send_pocket_order(asset, action, amount, duration)
 
@@ -95,4 +97,3 @@ def execute_trade():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
-    
